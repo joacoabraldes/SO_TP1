@@ -70,7 +70,7 @@ void place_players() {
         game_state->players[i].x = positions[i][1];
         game_state->players[i].y = positions[i][0];
         // Marcar celda como capturada
-        game_state->board[positions[i][0] * game_state->width + positions[i][1]] = -(int)i;
+        game_state->board[positions[i][0] * game_state->width + positions[i][1]] = -(i+1);
     }
 }
 
@@ -79,7 +79,7 @@ bool is_valid_move(int player_id, direction_t direction) {
     int x = game_state->players[player_id].x;
     int y = game_state->players[player_id].y;
     int new_x = x, new_y = y;
-    
+
     switch (direction) {
         case UP: new_y--; break;
         case UP_RIGHT: new_y--; new_x++; break;
@@ -90,18 +90,18 @@ bool is_valid_move(int player_id, direction_t direction) {
         case LEFT: new_x--; break;
         case UP_LEFT: new_y--; new_x--; break;
     }
-    
+
     // Verificar límites
     if (new_x < 0 || new_x >= game_state->width || new_y < 0 || new_y >= game_state->height) {
         return false;
     }
-    
-    // Verificar que la celda esté libre
+
+    // Verificar que la celda esté libre (debe ser >0 para poder moverse)
     int cell_value = game_state->board[new_y * game_state->width + new_x];
     if (cell_value <= 0) {
         return false;
     }
-    
+
     return true;
 }
 
@@ -127,7 +127,7 @@ void apply_move(int player_id, direction_t direction) {
     game_state->players[player_id].score += reward;
     
     // Marcar celda como capturada
-    game_state->board[new_y * game_state->width + new_x] = -player_id;
+    game_state->board[new_y * game_state->width + new_x] = -(player_id+1);
     
     // Actualizar posición
     game_state->players[player_id].x = new_x;
@@ -175,20 +175,22 @@ int main(int argc, char *argv[]) {
             case 't': timeout_sec = atoi(optarg); break;
             case 's': seed = atoi(optarg); break;
             case 'v': view_path = optarg; break;
-            case 'p': 
-                player_count = 0;
-                while (optind < argc && argv[optind][0] != '-') {
-                    if (player_count < MAX_PLAYERS) {
-                        player_paths[player_count++] = argv[optind++];
-                    } else {
-                        optind++;
-                    }
+            case 'p':
+                // Store the player path provided as optarg.
+                if (player_count < MAX_PLAYERS) {
+                    player_paths[player_count++] = optarg;
+                } else {
+                    fprintf(stderr, "Máximo de jugadores alcanzado (%d)\n", MAX_PLAYERS);
                 }
                 break;
             default:
                 fprintf(stderr, "Uso: %s [-w width] [-h height] [-d delay] [-t timeout] [-s seed] [-v view] -p player1 [player2 ...]\n", argv[0]);
                 exit(EXIT_FAILURE);
         }
+    }
+    // Recoger los paths de los jugadores después de getopt (so both styles work)
+    while (optind < argc && player_count < MAX_PLAYERS) {
+        player_paths[player_count++] = argv[optind++];
     }
     
     if (player_count == 0) {
@@ -353,11 +355,16 @@ int main(int argc, char *argv[]) {
     // Inicializar conjunto de file descriptors
     FD_ZERO(&read_fds);
     for (int i = 0; i < player_count; i++) {
-        FD_SET(player_pipes[i][PIPE_READ], &read_fds);
-        if (player_pipes[i][PIPE_READ] > max_fd) {
-            max_fd = player_pipes[i][PIPE_READ];
+        if (player_pipes[i][PIPE_READ] != -1) {
+            FD_SET(player_pipes[i][PIPE_READ], &read_fds);
+            if (player_pipes[i][PIPE_READ] > max_fd) {
+                max_fd = player_pipes[i][PIPE_READ];
+            }
         }
     }
+
+    // IMPORTANT: inicializar last_valid_move_time para evitar timeout inmediato
+    gettimeofday(&last_valid_move_time, NULL);
     
     while (!game_state->game_over) {
         // Configurar timeout
@@ -395,7 +402,7 @@ int main(int argc, char *argv[]) {
                     } else if (is_valid_move(i, (direction_t)move)) {
                         // Movimiento válido
                         apply_move(i, (direction_t)move);
-                        game_state->players[i].valid_moves++;
+                        // NOTE: apply_move already increments valid_moves
                         gettimeofday(&last_valid_move_time, NULL);
                     } else {
                         // Movimiento inválido

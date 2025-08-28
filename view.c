@@ -58,7 +58,7 @@ int main(int argc, char *argv[]) {
                 if (cell > 0) {
                     printf("%2d ", cell); // Recompensa
                 } else {
-                    printf("P%d ", -cell); // Jugador
+                    printf("P%d ", -cell); // Jugador (ahora -cell es 1-based)
                 }
             }
             printf("\n");
@@ -94,7 +94,7 @@ int main(int argc, char *argv[]) {
             if (cell > 0) {
                 printf("%2d ", cell); // Recompensa
             } else {
-                printf("P%d ", -cell); // Jugador
+                printf("P%d ", -cell); // Jugador (ahora -cell es 1-based)
             }
         }
         printf("\n");
