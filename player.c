@@ -43,14 +43,17 @@ int main(int argc, char *argv[]) {
         exit(EXIT_FAILURE);
     }
     
-    // IA simple: siempre intenta moverse hacia arriba
-    unsigned char move = UP;
-    
+    // Semilla para movimientos aleatorios
+    srand(getpid() ^ time(NULL));
+
     while (!game_state->game_over) {
         // Pequeña espera para evitar saturación
         struct timespec ts = {0, 10000000}; // 10ms
         nanosleep(&ts, NULL);
-        
+
+        // Elegir movimiento aleatorio
+        unsigned char move = rand() % 8;
+
         // Enviar movimiento
         ssize_t bytes_written = write(STDOUT_FILENO, &move, 1);
         if (bytes_written != 1) {

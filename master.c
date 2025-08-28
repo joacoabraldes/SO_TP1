@@ -151,6 +151,11 @@ int main(int argc, char *argv[]) {
     char *view_path = NULL;
     char *player_paths[MAX_PLAYERS];
     int player_count = 0;
+
+    // Declaraciones para select y tiempo
+    fd_set read_fds;
+    int max_fd = 0;
+    struct timeval last_valid_move_time, current_time;
     
     // Inicializar pipes
     for (int i = 0; i < MAX_PLAYERS; i++) {
@@ -249,40 +254,34 @@ int main(int argc, char *argv[]) {
     
     initialize_board(seed);
     place_players();
-    
+
     // Inicializar semáforos
     if (sem_init(&game_sync->master_to_view, 1, 0) == -1) {
         perror("sem_init master_to_view");
         cleanup();
         exit(EXIT_FAILURE);
     }
-    
     if (sem_init(&game_sync->view_to_master, 1, 0) == -1) {
         perror("sem_init view_to_master");
         cleanup();
         exit(EXIT_FAILURE);
     }
-    
     if (sem_init(&game_sync->master_mutex, 1, 1) == -1) {
         perror("sem_init master_mutex");
         cleanup();
         exit(EXIT_FAILURE);
     }
-    
     if (sem_init(&game_sync->state_mutex, 1, 1) == -1) {
         perror("sem_init state_mutex");
         cleanup();
         exit(EXIT_FAILURE);
     }
-    
     if (sem_init(&game_sync->reader_count_mutex, 1, 1) == -1) {
         perror("sem_init reader_count_mutex");
         cleanup();
         exit(EXIT_FAILURE);
     }
-    
     game_sync->reader_count = 0;
-    
     for (int i = 0; i < MAX_PLAYERS; i++) {
         if (sem_init(&game_sync->player_mutex[i], 1, 1) == -1) {
             perror("sem_init player_mutex");
@@ -290,43 +289,7 @@ int main(int argc, char *argv[]) {
             exit(EXIT_FAILURE);
         }
     }
-    
-    // Crear pipes para los jugadores
-    for (int i = 0; i < player_count; i++) {
-        if (pipe(player_pipes[i]) == -1) {
-            perror("pipe");
-            cleanup();
-            exit(EXIT_FAILURE);
-        }
-    }
-    
-    // Crear procesos de jugadores
-    for (int i = 0; i < player_count; i++) {
-        pid_t pid = fork();
-        if (pid == -1) {
-            perror("fork");
-            cleanup();
-            exit(EXIT_FAILURE);
-        } else if (pid == 0) {
-            // Proceso hijo (jugador)
-            close(player_pipes[i][PIPE_WRITE]);
-            dup2(player_pipes[i][PIPE_READ], STDIN_FILENO);
-            close(player_pipes[i][PIPE_READ]);
-            
-            char width_str[10], height_str[10];
-            snprintf(width_str, sizeof(width_str), "%d", width);
-            snprintf(height_str, sizeof(height_str), "%d", height);
-            
-            execl(player_paths[i], player_paths[i], width_str, height_str, NULL);
-            perror("execl");
-            exit(EXIT_FAILURE);
-        } else {
-            // Proceso padre (máster)
-            close(player_pipes[i][PIPE_READ]);
-            game_state->players[i].pid = pid;
-        }
-    }
-    
+
     // Crear proceso de vista si se especificó
     pid_t view_pid = -1;
     if (view_path != NULL) {
@@ -339,25 +302,60 @@ int main(int argc, char *argv[]) {
             char width_str[10], height_str[10];
             snprintf(width_str, sizeof(width_str), "%d", width);
             snprintf(height_str, sizeof(height_str), "%d", height);
-            
             execl(view_path, view_path, width_str, height_str, NULL);
             perror("execl view");
             exit(EXIT_FAILURE);
         }
     }
-    
-    // Bucle principal del juego
-    fd_set read_fds;
-    int max_fd = 0;
-    struct timeval last_valid_move_time, current_time;
-    gettimeofday(&last_valid_move_time, NULL);
-    
+
+    // Notificar a la vista del estado inicial (después de fork)
+    if (view_path != NULL) {
+        sem_post(&game_sync->master_to_view);
+        sem_wait(&game_sync->view_to_master);
+    }
+
+    // Crear pipes para los jugadores
+    for (int i = 0; i < player_count; i++) {
+        if (pipe(player_pipes[i]) == -1) {
+            perror("pipe");
+            cleanup();
+            exit(EXIT_FAILURE);
+        }
+    }
+
+    // Crear procesos de jugadores
+    for (int i = 0; i < player_count; i++) {
+        pid_t pid = fork();
+        if (pid == -1) {
+            perror("fork");
+            cleanup();
+            exit(EXIT_FAILURE);
+        } else if (pid == 0) {
+            // Proceso hijo (jugador)
+            close(player_pipes[i][PIPE_READ]); // Cierra el extremo de lectura en el hijo
+            dup2(player_pipes[i][PIPE_WRITE], STDOUT_FILENO); // Redirige stdout al pipe
+            close(player_pipes[i][PIPE_WRITE]); // Cierra el extremo de escritura duplicado
+
+            char width_str[10], height_str[10];
+            snprintf(width_str, sizeof(width_str), "%d", width);
+            snprintf(height_str, sizeof(height_str), "%d", height);
+
+            execl(player_paths[i], player_paths[i], width_str, height_str, NULL);
+            perror("execl");
+            exit(EXIT_FAILURE);
+        } else {
+            // Proceso padre (máster)
+            close(player_pipes[i][PIPE_WRITE]); // Cierra el extremo de escritura en el padre
+            game_state->players[i].pid = pid;
+        }
+    }
+
     // Inicializar conjunto de file descriptors
     FD_ZERO(&read_fds);
     for (int i = 0; i < player_count; i++) {
-        FD_SET(player_pipes[i][PIPE_WRITE], &read_fds);
-        if (player_pipes[i][PIPE_WRITE] > max_fd) {
-            max_fd = player_pipes[i][PIPE_WRITE];
+        FD_SET(player_pipes[i][PIPE_READ], &read_fds);
+        if (player_pipes[i][PIPE_READ] > max_fd) {
+            max_fd = player_pipes[i][PIPE_READ];
         }
     }
     
@@ -377,20 +375,20 @@ int main(int argc, char *argv[]) {
         
         // Procesar movimientos de jugadores
         for (int i = 0; i < player_count; i++) {
-            if (player_pipes[i][PIPE_WRITE] != -1 && FD_ISSET(player_pipes[i][PIPE_WRITE], &tmp_fds)) {
+            if (player_pipes[i][PIPE_READ] != -1 && FD_ISSET(player_pipes[i][PIPE_READ], &tmp_fds)) {
                 unsigned char move;
-                ssize_t bytes_read = read(player_pipes[i][PIPE_WRITE], &move, 1);
-                
+                ssize_t bytes_read = read(player_pipes[i][PIPE_READ], &move, 1);
+
                 if (bytes_read == 0) {
                     // EOF - jugador bloqueado
                     game_state->players[i].blocked = true;
-                    FD_CLR(player_pipes[i][PIPE_WRITE], &read_fds);
-                    close(player_pipes[i][PIPE_WRITE]);
-                    player_pipes[i][PIPE_WRITE] = -1;
+                    FD_CLR(player_pipes[i][PIPE_READ], &read_fds);
+                    close(player_pipes[i][PIPE_READ]);
+                    player_pipes[i][PIPE_READ] = -1;
                 } else if (bytes_read == 1) {
                     // Procesar movimiento
                     sem_wait(&game_sync->state_mutex);
-                    
+
                     if (move > 7) {
                         // Movimiento inválido
                         game_state->players[i].invalid_moves++;
@@ -403,15 +401,15 @@ int main(int argc, char *argv[]) {
                         // Movimiento inválido
                         game_state->players[i].invalid_moves++;
                     }
-                    
+
                     sem_post(&game_sync->state_mutex);
-                    
+
                     // Notificar a la vista si está presente
                     if (view_path != NULL) {
                         sem_post(&game_sync->master_to_view);
                         sem_wait(&game_sync->view_to_master);
                     }
-                    
+
                     // Pequeña espera para simular el delay
                     struct timespec ts = {0, delay_ms * 1000000};
                     nanosleep(&ts, NULL);
@@ -444,6 +442,12 @@ int main(int argc, char *argv[]) {
         }
     }
     
+    // Notificar a la vista del estado final antes de terminar
+    if (view_path != NULL) {
+        sem_post(&game_sync->master_to_view);
+        sem_wait(&game_sync->view_to_master);
+    }
+
     // Juego terminado - esperar a que los procesos hijos terminen
     for (int i = 0; i < player_count; i++) {
         int status;
