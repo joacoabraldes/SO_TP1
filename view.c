@@ -6,7 +6,23 @@
 #include <string.h>
 #include <locale.h>   // for setlocale
 
-// NOTE: view only needs read access to shared state
+// helper for sorting players
+static game_state_t *gstate_for_sort = NULL;
+static int cmp_players(const void *a, const void *b) {
+    int ia = *(const int*)a;
+    int ib = *(const int*)b;
+    const player_t *pa = &gstate_for_sort->players[ia];
+    const player_t *pb = &gstate_for_sort->players[ib];
+
+    // primary: score descending
+    if (pa->score != pb->score) return (pa->score < pb->score) ? 1 : -1;
+    // secondary: valid_moves ascending (fewer is better)
+    if (pa->valid_moves != pb->valid_moves) return (pa->valid_moves > pb->valid_moves) ? 1 : -1;
+    // tertiary: invalid_moves ascending (fewer is better)
+    if (pa->invalid_moves != pb->invalid_moves) return (pa->invalid_moves > pb->invalid_moves) ? 1 : -1;
+    return 0;
+}
+
 int main(int argc, char *argv[]) {
     if (argc != 3) {
         fprintf(stderr, "Uso: %s <ancho> <alto>\n", argv[0]);
@@ -70,9 +86,7 @@ int main(int argc, char *argv[]) {
     const char *fg_head = "\x1b[97m"; // bright foreground for the head glyph
 
     // Characters
-    // You asked for "☺" — it's a multi-byte Unicode glyph. If it misaligns in your terminal,
-    // replace with "O" or a digit.
-    const char *head_glyph = "☺";
+    const char *head_glyph = "☺"; // if misaligned on some terminals, change to "O" or a digit
     const int CELL_W = 3; // visible chars per cell
 
     while (!game_state->game_over) {
@@ -97,7 +111,6 @@ int main(int argc, char *argv[]) {
 
                 if (cell > 0) {
                     // reward cell: center the digit in CELL_W columns, dim color
-                    // rewards are 1..9 so single-digit
                     printf("%s %d %s", dim, cell, reset);
                 } else {
                     // occupied by player (body or head). Determine which player.
@@ -112,9 +125,7 @@ int main(int argc, char *argv[]) {
                     }
 
                     if (is_head) {
-                        // Print head as colored cell with centered glyph (fg_head).
-                        // Keep bg and fg applied to the entire CELL_W field so block looks contiguous.
-                        // Sequence: bg + fg + " " + glyph + " " + reset
+                        // Print head as colored cell with centered glyph (fg_head)
                         printf("%s%s %s %s", bg, fg_head, head_glyph, reset);
                     } else {
                         // Print normal colored block (three spaces with bg)
@@ -132,15 +143,22 @@ int main(int argc, char *argv[]) {
         }
         printf("╝\n");
 
-        // Legend / players info (aligned scoreboard beneath the board)
+        // Build sorted order of players by score (and tie-breakers)
+        unsigned int pc = game_state->player_count;
+        int *order = malloc(pc * sizeof(int));
+        if (!order) order = NULL;
+        for (unsigned int i = 0; i < pc; i++) order[i] = i;
+
+        gstate_for_sort = game_state;
+        qsort(order, pc, sizeof(int), cmp_players);
+
+        // Legend / players info (aligned scoreboard beneath the board), sorted
         printf("\n");
-        // Header for stats
         printf("  Players:                         Puntos   Válidos  Inválidos\n");
         printf("  ------------------------------------------------------------\n");
-        for (unsigned int i = 0; i < game_state->player_count; i++) {
+        for (unsigned int idx = 0; idx < pc; idx++) {
+            int i = order[idx]; // original player index
             const char *bg = bg_colors[i % n_colors];
-            // small colored square (2 spaces) as legend indicator + reset
-            // format columns nicely: name left-aligned, numbers right-aligned
             printf("  %s  %s %-12s %20u %9u %11u\n",
                    bg, reset,
                    game_state->players[i].name,
@@ -148,6 +166,7 @@ int main(int argc, char *argv[]) {
                    game_state->players[i].valid_moves,
                    game_state->players[i].invalid_moves);
         }
+        if (order) free(order);
 
         // Footer hint
         printf("\n(Colores = jugadores, números = recompensas. Head = ☺)\n");
