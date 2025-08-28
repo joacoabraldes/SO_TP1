@@ -137,6 +137,17 @@ void apply_move(int player_id, direction_t direction) {
     game_state->players[player_id].valid_moves++;
 }
 
+// Devuelve true si al menos un jugador no bloqueado tiene algún movimiento válido
+bool any_player_has_valid_move() {
+    for (unsigned int i = 0; i < game_state->player_count; i++) {
+        if (game_state->players[i].blocked) continue;
+        for (int d = 0; d < 8; d++) {
+            if (is_valid_move(i, (direction_t)d)) return true;
+        }
+    }
+    return false;
+}
+
 int main(int argc, char *argv[]) {
     // Configurar manejador de señales
     signal(SIGINT, signal_handler);
@@ -424,6 +435,12 @@ int main(int argc, char *argv[]) {
             }
         }
         
+        // Si ninguno de los jugadores no bloqueados tiene movimientos válidos -> terminar
+        if (!any_player_has_valid_move()) {
+            game_state->game_over = true;
+            break;
+        }
+
         // Verificar timeout
         gettimeofday(&current_time, NULL);
         double elapsed = (current_time.tv_sec - last_valid_move_time.tv_sec) +
