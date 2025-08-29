@@ -1,5 +1,9 @@
 #define _XOPEN_SOURCE 700
 #include "common.h"
+#include "shm_manager.h"
+#include <stdlib.h>
+#include <time.h>
+#include <unistd.h>
 
 int main(int argc, char *argv[]) {
     if (argc != 3) {
@@ -9,63 +13,30 @@ int main(int argc, char *argv[]) {
     
     int width = atoi(argv[1]);
     int height = atoi(argv[2]);
-    
-    // Abrir memoria compartida del estado
-    int shm_state_fd = shm_open(SHM_GAME_STATE, O_RDONLY, 0666);
-    if (shm_state_fd == -1) {
-        perror("shm_open state");
-        exit(EXIT_FAILURE);
-    }
-    
+
     size_t state_size = sizeof(game_state_t) + width * height * sizeof(int);
-    game_state_t *game_state = mmap(NULL, state_size, PROT_READ, MAP_SHARED, shm_state_fd, 0);
-    if (game_state == MAP_FAILED) {
-        perror("mmap state");
-        close(shm_state_fd);
-        exit(EXIT_FAILURE);
-    }
-    
-    // Abrir memoria compartida de sincronización
-    int shm_sync_fd = shm_open(SHM_GAME_SYNC, O_RDWR, 0666);
-    if (shm_sync_fd == -1) {
-        perror("shm_open sync");
-        munmap(game_state, state_size);
-        close(shm_state_fd);
-        exit(EXIT_FAILURE);
-    }
-    
-    game_sync_t *game_sync = mmap(NULL, sizeof(game_sync_t), PROT_READ | PROT_WRITE, MAP_SHARED, shm_sync_fd, 0);
-    if (game_sync == MAP_FAILED) {
-        perror("mmap sync");
-        munmap(game_state, state_size);
-        close(shm_state_fd);
-        close(shm_sync_fd);
-        exit(EXIT_FAILURE);
-    }
-    
-    // Semilla para movimientos aleatorios
+
+    shm_manager_t *state_mgr = shm_manager_open(SHM_GAME_STATE, state_size, 0);
+    if (!state_mgr) { perror("shm_manager_open state"); exit(EXIT_FAILURE); }
+    game_state_t *game_state = (game_state_t *)shm_manager_data(state_mgr);
+
+    shm_manager_t *sync_mgr = shm_manager_open(SHM_GAME_SYNC, sizeof(game_sync_t), 0);
+    if (!sync_mgr) { perror("shm_manager_open sync"); shm_manager_close(state_mgr); exit(EXIT_FAILURE); }
+    game_sync_t *game_sync = (game_sync_t *)shm_manager_data(sync_mgr);
+
     srand(getpid() ^ time(NULL));
 
     while (!game_state->game_over) {
-        // Pequeña espera para evitar saturación
-        struct timespec ts = {0, 10000000}; // 10ms
+        struct timespec ts = {0, 10000000};
         nanosleep(&ts, NULL);
 
-        // Elegir movimiento aleatorio
         unsigned char move = rand() % 8;
-
-        // Enviar movimiento
         ssize_t bytes_written = write(STDOUT_FILENO, &move, 1);
-        if (bytes_written != 1) {
-            break; // Error o EOF
-        }
+        if (bytes_written != 1) break;
     }
     
-    // Limpiar recursos
-    munmap(game_state, state_size);
-    munmap(game_sync, sizeof(game_sync_t));
-    close(shm_state_fd);
-    close(shm_sync_fd);
-    
+    // clean up
+    shm_manager_close(state_mgr);
+    shm_manager_close(sync_mgr);
     return 0;
 }

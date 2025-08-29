@@ -1,19 +1,38 @@
-CC = gcc
-CFLAGS = -Wall -Wextra -std=c11 -pedantic
-LDFLAGS = -lpthread -lrt
+# Makefile
 
-all: master view player
+CC      := gcc
+CFLAGS  := -Wall -Wextra -std=c11 -pedantic -g
+LDLIBS  := -pthread -lrt
 
-master: master.c common.h
-	$(CC) $(CFLAGS) master.c -o master $(LDFLAGS)
+# Shared helper implementation to link into every binary
+SHM_SRCS := shm_manager.c
 
-view: view.c common.h
-	$(CC) $(CFLAGS) view.c -o view $(LDFLAGS)
+# Explicit sources for master and view (kept for clarity)
+MASTER_SRCS := master.c $(SHM_SRCS)
+VIEW_SRCS   := view.c $(SHM_SRCS)
 
-player: player.c common.h
-	$(CC) $(CFLAGS) player.c -o player $(LDFLAGS)
+# Automatically discover all player*.c sources and corresponding program names
+PLAYER_SRCS := $(wildcard player*.c)
+PLAYER_PROGS := $(PLAYER_SRCS:.c=)
 
-clean:
-	rm -f master view player
+# All programs to build
+PROGS := master view $(PLAYER_PROGS)
 
 .PHONY: all clean
+
+all: $(PROGS)
+
+# explicit master/view rules (linking shm_manager.c)
+master: $(MASTER_SRCS)
+	$(CC) $(CFLAGS) $(MASTER_SRCS) -o $@ $(LDLIBS)
+
+view: $(VIEW_SRCS)
+	$(CC) $(CFLAGS) $(VIEW_SRCS) -o $@ $(LDLIBS)
+
+# Generic rule for any other program that has a single .c source and needs shm_manager.c
+# This will build player programs like player.c, player_random.c, player_ai.c, ...
+%: %.c $(SHM_SRCS)
+	$(CC) $(CFLAGS) $< $(SHM_SRCS) -o $@ $(LDLIBS)
+
+clean:
+	rm -f $(PROGS) *.o
