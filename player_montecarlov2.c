@@ -11,6 +11,7 @@
 #include <string.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <float.h>
 
 /*
  * Improved Monte-Carlo player that is opponent-aware and trap-aware.
@@ -118,9 +119,10 @@ static int sim_count_liberties(int *board, int width, int height, sim_player_t *
    use a policy that prefers moves with good immediate reward but also high liberties
    (to avoid being trivially trapped). Add small randomness to avoid deterministic loops. */
 static int sim_pick_policy_move(int *board, int width, int height, sim_player_t *players, int player_count, int pid) {
+    (void)player_count; /* unused parameter in current policy implementation */
     int valid_dirs[8]; int valid_count = 0;
     int best_dirs[8]; int best_count = 0;
-    double best_score = -INFINITY;
+    double best_score = -DBL_MAX;
 
     for (int d = 0; d < 8; d++) {
         int tx, ty; target_from_dir(players[pid].x, players[pid].y, d, &tx, &ty);
@@ -166,7 +168,10 @@ static void compute_voronoi_potential(int *board, int width, int height, sim_pla
     int *dist = malloc(sizeof(int) * n);
     int *owner = malloc(sizeof(int) * n);
     if (!dist || !owner) {
-        if (dist) free(dist); if (owner) free(owner); return; }
+        if (dist) free(dist);
+        if (owner) free(owner);
+        return;
+    }
     for (int i = 0; i < n; i++) { dist[i] = INT_MAX; owner[i] = -1; }
 
     /* simple BFS queue (we'll use arrays for speed) */
@@ -243,7 +248,7 @@ static void simulate_playout(int *board, int width, int height, sim_player_t *pl
 
 int main(int argc, char *argv[]) {
     if (argc != 3) {
-        fprintf(stderr, "Uso: %s <ancho> <alto>\n", argv[0]);
+        fprintf(stderr, "Uso: %s <ancho> <alto>\\n", argv[0]);
         return EXIT_FAILURE;
     }
 
@@ -255,12 +260,12 @@ int main(int argc, char *argv[]) {
     shm_manager_t *state_mgr = shm_manager_open(SHM_GAME_STATE, state_size, 0);
     if (!state_mgr) { perror("shm_manager_open state"); return EXIT_FAILURE; }
     game_state_t *game_state = (game_state_t *)shm_manager_data(state_mgr);
-    if (!game_state) { fprintf(stderr, "failed to get game_state pointer\n"); shm_manager_close(state_mgr); return EXIT_FAILURE; }
+    if (!game_state) { fprintf(stderr, "failed to get game_state pointer\\n"); shm_manager_close(state_mgr); return EXIT_FAILURE; }
 
     shm_manager_t *sync_mgr = shm_manager_open(SHM_GAME_SYNC, sizeof(game_sync_t), 0);
     if (!sync_mgr) { perror("shm_manager_open sync"); shm_manager_close(state_mgr); return EXIT_FAILURE; }
     game_sync_t *game_sync = (game_sync_t *)shm_manager_data(sync_mgr);
-    if (!game_sync) { fprintf(stderr, "failed to get game_sync pointer\n"); shm_manager_close(state_mgr); shm_manager_close(sync_mgr); return EXIT_FAILURE; }
+    if (!game_sync) { fprintf(stderr, "failed to get game_sync pointer\\n"); shm_manager_close(state_mgr); shm_manager_close(sync_mgr); return EXIT_FAILURE; }
 
     int my_index = -1;
     const int max_iters = 500; // small wait loop like the sample
@@ -274,7 +279,7 @@ int main(int argc, char *argv[]) {
     }
     if (my_index == -1) my_index = find_my_index(game_state, game_sync);
     if (my_index == -1) {
-        fprintf(stderr, "player: couldn't determine my index (pid %d)\n", (int)getpid());
+        fprintf(stderr, "player: couldn't determine my index (pid %d)\\n", (int)getpid());
         shm_manager_close(state_mgr); shm_manager_close(sync_mgr);
         return EXIT_FAILURE;
     }
@@ -288,7 +293,7 @@ int main(int argc, char *argv[]) {
     sim_player_t *players_sim = malloc(sizeof(sim_player_t) * game_state->player_count);
     unsigned int *vor_tmp = malloc(sizeof(unsigned int) * game_state->player_count);
     if (!board_snapshot || !board_sim || !players_snapshot || !players_sim || !vor_tmp) {
-        fprintf(stderr, "allocation failed\n");
+        fprintf(stderr, "allocation failed\\n");
         return EXIT_FAILURE;
     }
 
@@ -379,7 +384,7 @@ int main(int argc, char *argv[]) {
            according to a combined metric: avg_sim_score + gamma * voronoi_potential. */
         int pick = best_candidates[rand() % best_candidates_count];
         if (best_candidates_count > 1) {
-            double best_combined = -INFINITY;
+            double best_combined = -DBL_MAX;
             int topk = best_candidates_count;
             if (topk > 4) topk = 4; /* limit how many we evaluate with Voronoi for performance */
             for (int t = 0; t < topk; t++) {
@@ -396,7 +401,7 @@ int main(int argc, char *argv[]) {
                 /* gamma weights the territory estimate; chosen experimentally */
                 double gamma = 0.03; /* small because vor sums are raw board values */
                 /* find index in candidate_avgs for this cand */
-                double avg = -INFINITY;
+                double avg = -DBL_MAX;
                 for (int ci = 0; ci < valid_count; ci++) if (valid_dirs[ci] == cand) { avg = candidate_avgs[ci]; break; }
                 double combined = avg + gamma * my_vor;
                 if (combined > best_combined) { best_combined = combined; pick = cand; }
