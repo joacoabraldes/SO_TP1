@@ -1,6 +1,6 @@
 #define _XOPEN_SOURCE 700
-#include "common.h"
-#include "shm_manager.h"
+#include "./common.h"
+#include "./shm_manager.h"
 #include <stdlib.h>
 #include <time.h>
 #include <unistd.h>
