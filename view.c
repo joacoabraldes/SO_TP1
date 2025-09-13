@@ -1,4 +1,4 @@
-#define _XOPEN_SOURCE 700
+
 #include "common.h"
 #include "shm_manager.h"
 #include <stdio.h>

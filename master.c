@@ -1,4 +1,3 @@
-#define _XOPEN_SOURCE 700
 #include "common.h"
 #include "shm_manager.h"
 #include <getopt.h>
@@ -15,12 +14,14 @@
 
 /*
  master.c - event-driven master scheduler (replacement for round-robin)
-  - Gives each player one initial token so they can compute/send a move.
-  - Uses select() on all player pipes and processes moves as they arrive.
-  - After processing a move from player i, posts player_mutex[i] so that
-    player i can compute and send the next move.
-  - Keeps one outstanding move per player (prevents flooding).
-  - Preserves state protection via state_mutex and view sync with master_to_view/view_to_master semaphores.
+  - Da a cada jugador un token inicial para que calcule/envíe su primer movimiento.
+  - Usa select() sobre las pipes de los jugadores y procesa movimientos al llegar.
+  - Después de procesar un movimiento del jugador i, hace sem_post(player_mutex[i])
+    para que ese jugador pueda calcular/enviar su siguiente movimiento.
+  - Mantiene un movimiento pendiente por jugador (evita flooding).
+  - Protege el estado con state_mutex y sincroniza la vista con master_to_view/view_to_master.
+  - Al finalizar: marca game_over, desbloquea jugadores, espera a los hijos y muestra
+    únicamente la línea del ganador (o "Empate").
 */
 
 game_state_t *game_state = NULL;
@@ -294,7 +295,7 @@ int main(int argc, char *argv[]) {
 
     gettimeofday(&last_valid_move_time, NULL);
 
-    /* KEY: give each player one initial token so they can compute/send first move */
+    /* give each player one initial token */
     for (int i = 0; i < player_count; i++) {
         if (!game_state->players[i].blocked) sem_post(&game_sync->player_mutex[i]);
     }
@@ -385,23 +386,38 @@ int main(int argc, char *argv[]) {
         if (all_blocked) { game_state->game_over = true; break; }
     }
 
+    /* Final view update if present */
     if (view_path != NULL) {
         sem_post(&game_sync->master_to_view);
         sem_wait(&game_sync->view_to_master);
     }
 
+    /* Mark game_over under state_mutex to make sure players see final state */
+    if (sem_wait(&game_sync->state_mutex) == -1) {
+        perror("sem_wait state_mutex (final)");
+    } else {
+        game_state->game_over = true;
+        if (sem_post(&game_sync->state_mutex) == -1) perror("sem_post state_mutex (final)");
+    }
+
+    /* Unblock any players that may be waiting so they can exit cleanly */
     for (int i = 0; i < player_count; i++) {
-        int status;
-        waitpid(game_state->players[i].pid, &status, 0);
-        printf("Jugador %s: ", game_state->players[i].name);
-        if (WIFEXITED(status)) printf("exit code %d", WEXITSTATUS(status));
-        else if (WIFSIGNALED(status)) printf("señal %d", WTERMSIG(status));
-        printf(", Puntaje: %u\n", game_state->players[i].score);
+        sem_post(&game_sync->player_mutex[i]);
+    }
+
+    /* Wait for all player processes (reap children) but do NOT print per-player lines */
+    for (int i = 0; i < player_count; i++) {
+        pid_t p = game_state->players[i].pid;
+        if (p != 0) {
+            int status;
+            waitpid(p, &status, 0);
+            (void)status; /* intentionally ignore status/output */
+        }
     }
 
     if (view_path != NULL) waitpid(view_pid, NULL, 0);
 
-    /* decide winner */
+    /* decide winner (use the stable game_state after all players exited) */
     int winner = -1;
     unsigned int max_score = 0;
     unsigned int min_valid_moves = 99999;
@@ -425,7 +441,6 @@ int main(int argc, char *argv[]) {
             }
         }
     }
-
     if (winner != -1) printf("Ganador: %s con %u puntos\n", game_state->players[winner].name, game_state->players[winner].score);
     else printf("Empate\n");
 

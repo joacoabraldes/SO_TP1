@@ -1,4 +1,4 @@
-#define _XOPEN_SOURCE 700
+
 #include "common.h"
 #include "shm_manager.h"
 #include <stdlib.h>
@@ -73,6 +73,7 @@ int main(int argc, char *argv[]) {
         return EXIT_FAILURE;
     }
     game_sync_t *game_sync = (game_sync_t *)shm_manager_data(sync_mgr);
+    (void)game_sync; /* silence unused-variable warning if static analysis/compilation can't detect uses */
     if (!game_sync) {
         fprintf(stderr, "failed to get game_sync pointer\n");
         shm_manager_close(state_mgr);

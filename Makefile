@@ -1,8 +1,8 @@
 # Makefile
 
 CC      := gcc
-CFLAGS  := -Wall -Wextra -std=c11 -pedantic -g
-LDLIBS  := -pthread -lrt
+CFLAGS  := -Wall -Wextra -std=c11 -pedantic -g -D_XOPEN_SOURCE=700
+LDLIBS  := -pthread -lrt -lm
 
 # Shared helper implementation to link into every binary
 SHM_SRCS := shm_manager.c

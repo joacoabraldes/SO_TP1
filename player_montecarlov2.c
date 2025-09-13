@@ -13,27 +13,6 @@
 #include <stdint.h>
 #include <float.h>
 
-/*
- * Improved Monte-Carlo player that is opponent-aware and trap-aware.
- *
- * Key improvements over the flat-MonteCarlo version:
- *  1) Opponent-aware playout policy: opponents choose moves that balance
- *     immediate reward and local 'liberties' (number of adjacent free cells),
- *     which encourages moves that avoid getting trapped and that cut others off.
- *  2) Trap/territory heuristic (Voronoi-like): for the best candidate moves we
- *     compute a quick multi-source distance flood-fill to estimate which empty
- *     cells each player can *uniquely* reach earlier than others. Cells that
- *     only our player can reach are treated as potential future captures.
- *  3) Final candidate ranking mixes average simulated final score with the
- *     territory estimate to prefer moves that not only score well in playouts
- *     but also trap opponents or secure contested regions.
- *
- * These changes make the player consider other players' reactions and the
- * consequences of giving up or securing regions. This isn't guaranteed to
- * always win (no simple always-win strategy exists in general multiplayer
- * perfect-information games), but it is substantially stronger at trapping and
- * region control than a pure greedy or vanilla-MC approach.
- */
 
 static int find_my_index(game_state_t *gs, game_sync_t *sync) {
     pid_t me = getpid();
