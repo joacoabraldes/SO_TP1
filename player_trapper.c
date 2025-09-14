@@ -1,3 +1,10 @@
+/* player_trapper_rw.c
+ *
+ * Trapper-style player adapted to use the same connection / RW reader protocol
+ * as the previous working player. Logic (simulations, heuristics, Voronoi)
+ * preserved almost verbatim. Sends one raw unsigned char (0..7) to stdout.
+ */
+
 #include "common.h"
 #include "shm_manager.h"
 #include <stdlib.h>
@@ -12,29 +19,39 @@
 #include <stdint.h>
 #include <float.h>
 
-/*
- * player_trapper.c
- *
- * Trapper-style player (fixed): contains the helper functions that were
- * missing in the previous version (notably sim_any_player_has_move and
- * target_from_dir) so the file links and the player can run. The logic is
- * based on the working MonteCarlo player you provided, simplified and
- * adapted for reliability.
- */
+#define MAX_PLAYERS_PROBE 128
 
+/* ===== helper: reader-entry / exit helpers (writer-preference) ===== */
+static inline void reader_enter(game_sync_t *sync) {
+    /* follow the same pattern as the other player */
+    sem_wait(&sync->master_mutex);
+    sem_post(&sync->master_mutex);
+
+    sem_wait(&sync->reader_count_mutex);
+    sync->reader_count++;
+    if (sync->reader_count == 1) sem_wait(&sync->state_mutex);
+    sem_post(&sync->reader_count_mutex);
+}
+static inline void reader_exit(game_sync_t *sync) {
+    sem_wait(&sync->reader_count_mutex);
+    sync->reader_count--;
+    if (sync->reader_count == 0) sem_post(&sync->state_mutex);
+    sem_post(&sync->reader_count_mutex);
+}
+
+/* find_my_index now uses reader lock when reading the players[] table */
 static int find_my_index(game_state_t *gs, game_sync_t *sync) {
     pid_t me = getpid();
     int idx = -1;
-    if (sem_wait(&sync->state_mutex) == -1) {
-        return -1;
-    }
+
+    reader_enter(sync);
     for (unsigned int i = 0; i < gs->player_count; i++) {
         if ((pid_t)gs->players[i].pid == me) {
             idx = (int)i;
             break;
         }
     }
-    sem_post(&sync->state_mutex);
+    reader_exit(sync);
     return idx;
 }
 
@@ -287,7 +304,10 @@ int main(int argc, char *argv[]) {
     int width = atoi(argv[1]);
     int height = atoi(argv[2]);
     size_t state_size = sizeof(game_state_t) + (size_t)width * height * sizeof(int);
-    shm_manager_t *state_mgr = shm_manager_open(SHM_GAME_STATE, state_size, 0);
+
+    /* --- Open the shared memory exactly the same way as the other player:
+       pass 0 size to map the existing segment (we only read). */
+    shm_manager_t *state_mgr = shm_manager_open(SHM_GAME_STATE, 0, 0);
     if (!state_mgr) {
         perror("shm_manager_open state");
         return EXIT_FAILURE;
@@ -298,7 +318,8 @@ int main(int argc, char *argv[]) {
         shm_manager_close(state_mgr);
         return EXIT_FAILURE;
     }
-    shm_manager_t *sync_mgr = shm_manager_open(SHM_GAME_SYNC, sizeof(game_sync_t), 0);
+
+    shm_manager_t *sync_mgr = shm_manager_open(SHM_GAME_SYNC, 0, 0);
     if (!sync_mgr) {
         perror("shm_manager_open sync");
         shm_manager_close(state_mgr);
@@ -355,6 +376,7 @@ int main(int argc, char *argv[]) {
     }
 
     while (1) {
+        /* wait for master to allow this player (same as before) */
         if (sem_wait(&game_sync->player_mutex[my_index]) == -1) {
             if (errno == EINTR) {
                 continue;
@@ -370,16 +392,10 @@ int main(int argc, char *argv[]) {
             break;
         }
 
-        if (sem_wait(&game_sync->state_mutex) == -1) {
-            if (errno == EINTR) {
-                sem_post(&game_sync->player_mutex[my_index]);
-                continue;
-            }
-            break;
-        }
-
+        /* ===== Reader entry: snapshot the board and players while holding reader lock ===== */
+        reader_enter(game_sync);
         if (game_state->game_over) {
-            sem_post(&game_sync->state_mutex);
+            reader_exit(game_sync);
             break;
         }
 
@@ -391,8 +407,9 @@ int main(int argc, char *argv[]) {
 
         copy_board(board_snapshot, game_state->board, gwidth * gheight);
         copy_players_sim(players_snapshot, game_state->players, gplayer_count);
-        sem_post(&game_sync->state_mutex);
+        reader_exit(game_sync);
 
+        /* compute local valid moves and heuristics exactly as before */
         int valid_dirs[8];
         int valid_count = 0;
         int immediate_vals[8];
@@ -411,6 +428,7 @@ int main(int argc, char *argv[]) {
             valid_count++;
         }
         if (valid_count == 0) {
+            /* no valid moves: skip (master will mark blocked eventually) */
             continue;
         }
 
@@ -429,7 +447,6 @@ int main(int argc, char *argv[]) {
             int bc = 0;
             for (int i = 0; i < valid_count; i++) {
                 int d = valid_dirs[i];
-                /* neighbors sum */
                 int tx, ty;
                 target_from_dir(gx, gy, d, &tx, &ty);
                 int neigh_sum = 0;
@@ -455,6 +472,7 @@ int main(int argc, char *argv[]) {
             }
             int pick = bests[rand() % bc];
 
+            /* Re-check under exclusive state_mutex before sending (to ensure position not changed) */
             if (sem_wait(&game_sync->state_mutex) == -1) {
                 if (errno == EINTR) {
                     sem_post(&game_sync->player_mutex[my_index]);
@@ -482,17 +500,13 @@ int main(int argc, char *argv[]) {
             continue;
         }
 
-        /* Candidate pruning: keep top-K by immediate cell value */
+        /* Candidate pruning and sims (identical to your original) */
         int K = 3;
         if (valid_count < K) {
             K = valid_count;
         }
-        /* simple selection of top-K indices */
         int idxs[8];
-        for (int i = 0; i < valid_count; i++) {
-            idxs[i] = i;
-        }
-        /* partial sort: selection of top K (selection sort) */
+        for (int i = 0; i < valid_count; i++) idxs[i] = i;
         for (int i = 0; i < K; i++) {
             int best = i;
             for (int j = i + 1; j < valid_count; j++) {
@@ -505,34 +519,22 @@ int main(int argc, char *argv[]) {
             idxs[best] = tmp;
         }
 
-        /* adaptive sims budget for top-K only */
         int board_cells = gwidth * gheight;
         int sims_per_candidate = 400;
-        if (board_cells <= 25) {
-            sims_per_candidate = 500;
-        } else if (board_cells <= 100) {
-            sims_per_candidate = 300;
-        } else if (board_cells <= 400) {
-            sims_per_candidate = 150;
-        } else {
-            sims_per_candidate = 80;
-        }
+        if (board_cells <= 25) sims_per_candidate = 500;
+        else if (board_cells <= 100) sims_per_candidate = 300;
+        else if (board_cells <= 400) sims_per_candidate = 150;
+        else sims_per_candidate = 80;
         int max_total_sims = 2000;
         long total_sims = (long)sims_per_candidate * K;
-        if (total_sims > max_total_sims) {
-            sims_per_candidate = max_total_sims / K;
-        }
-        if (sims_per_candidate < 5) {
-            sims_per_candidate = 5;
-        }
+        if (total_sims > max_total_sims) sims_per_candidate = max_total_sims / K;
+        if (sims_per_candidate < 5) sims_per_candidate = 5;
 
         double best_avg = -DBL_MAX;
         int bests2[8];
         int bestc2 = 0;
         double candidate_avgs[8];
-        for (int i = 0; i < valid_count; i++) {
-            candidate_avgs[i] = (double)immediate_vals[i];
-        }
+        for (int i = 0; i < valid_count; i++) candidate_avgs[i] = (double)immediate_vals[i];
 
         for (int t = 0; t < K; t++) {
             int ci = idxs[t];
@@ -560,14 +562,11 @@ int main(int argc, char *argv[]) {
             }
         }
 
-        /* If multiple top candidates compute Voronoi only for them (using preallocated buffers) */
         int pick = bests2[rand() % bestc2];
         if (bestc2 > 1) {
             double best_comb = -DBL_MAX;
             int topk = bestc2;
-            if (topk > 4) {
-                topk = 4;
-            }
+            if (topk > 4) topk = 4;
             for (int t = 0; t < topk; t++) {
                 int cand = bests2[t];
                 copy_board(board_sim, board_snapshot, gwidth * gheight);
@@ -586,6 +585,8 @@ int main(int argc, char *argv[]) {
         }
 
         unsigned char move = (unsigned char)pick;
+
+        /* Re-check under exclusive state_mutex and send one raw byte if still valid */
         if (sem_wait(&game_sync->state_mutex) == -1) {
             if (errno == EINTR) {
                 sem_post(&game_sync->player_mutex[my_index]);
