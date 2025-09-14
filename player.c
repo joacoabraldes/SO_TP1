@@ -22,7 +22,6 @@ int main(int argc, char *argv[]) {
 
     shm_manager_t *sync_mgr = shm_manager_open(SHM_GAME_SYNC, sizeof(game_sync_t), 0);
     if (!sync_mgr) { perror("shm_manager_open sync"); shm_manager_close(state_mgr); exit(EXIT_FAILURE); }
-    game_sync_t *game_sync = (game_sync_t *)shm_manager_data(sync_mgr);
 
     srand(getpid() ^ time(NULL));
 
