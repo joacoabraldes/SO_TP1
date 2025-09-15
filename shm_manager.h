@@ -20,7 +20,6 @@ int shm_manager_close(shm_manager_t *mgr);
 
 int shm_manager_destroy(shm_manager_t *mgr);
 
-/* Accessors */
 void *shm_manager_data(shm_manager_t *mgr);   
 size_t shm_manager_size(shm_manager_t *mgr);
 sem_t *shm_manager_front_sem(shm_manager_t *mgr); 

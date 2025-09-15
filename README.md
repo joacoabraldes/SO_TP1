@@ -24,21 +24,21 @@ Comando de ejemplo para abrir un contenedor con el repo montado en `/root`:
 docker run -v "${PWD}:/root" -w /root --privileged -ti agodio/itba-so-multi-platform:3.0 /bin/bash
 ```
 
-Dentro del contenedor: compilar con `make` (suponiendo que el `Makefile` del repo está correcto):
+Dentro del contenedor: compilar con `make` :
 
 ```sh
 make
 ```
 
-Esto debe producir los binarios del proyecto (por ejemplo: `ChompChamps`, `view`, `player_trapper`, `player`, etc.).
+Esto debe producir los binarios del proyecto (por ejemplo: `view`, `player`, etc.).
 
 ---
 
 ## Archivos importantes
 
-* `ChompChamps` (máster / orquestador). Lanza jugadores y (opcionalmente) la `view`, usa memoria compartida y semáforos.
+* `master` (máster / orquestador). Lanza jugadores y (opcionalmente) la `view`, usa memoria compartida y semáforos.
 * `view` (visualizador de tablero). Lee la memoria compartida y dibuja el estado.
-* `player_trapper`, `player` (jugadores). Se conectan al `master` a través de memoria compartida y envían **un byte** por `stdout` con el movimiento.
+* `player` (jugador). Se conectan al `master` a través de memoria compartida y envían **un byte** por `stdout` con el movimiento.
 
 ---
 
@@ -47,7 +47,7 @@ Esto debe producir los binarios del proyecto (por ejemplo: `ChompChamps`, `view`
 Ejemplo de ejecución (igual que indicaste):
 
 ```sh
-./master -w 10 -h 10 -d 200 -t 10 -s 123 -v ./view -p ./player_trapper -p ./player_trapper
+./master -w 10 -h 10 -d 200 -t 10 -s 123 -v ./view -p ./player ./player
 ```
 
 ### Descripción de opciones (corregidas y aclaradas)
@@ -73,7 +73,7 @@ git clone https://github.com/joacoabraldes/SO_TP1.git
 cd SO_TP1
 ```
 
-2. Abrir contenedor Docker (opcional)
+2. Abrir contenedor Docker 
 
 ```sh
 docker run -v "${PWD}:/root" -w /root --privileged -ti agodio/itba-so-multi-platform:3.0 /bin/bash
@@ -84,7 +84,7 @@ make
 3. Ejecutar el juego (ejemplo con view y 2 jugadores):
 
 ```sh
-./master -w 10 -h 10 -d 200 -t 10 -s 123 -v ./view -p ./player_trapper -p ./player_trapper
+./master -w 10 -h 10 -d 200 -t 10 -s 123 -v ./view -p ./player ./player
 ```
 
 4. Alternativa: arrancar `view` por separado (si no le pasaste `-v` al master):

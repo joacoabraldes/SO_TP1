@@ -12,13 +12,58 @@
 #include <string.h>
 #include <time.h>
 
+
+
 game_state_t *game_state = NULL;
 game_sync_t *game_sync = NULL;
 shm_manager_t *state_mgr = NULL;
 shm_manager_t *sync_mgr = NULL;
 int player_pipes[MAX_PLAYERS][2];
 
+
+static int sync_sems_destroyed = 0;
+
+
+static void destroy_sync_sems(void) {
+    if (sync_sems_destroyed) return;
+    if (game_sync == NULL) return;
+
+
+    for (int i = 0; i < MAX_PLAYERS; i++) {
+      
+        sem_post(&game_sync->player_mutex[i]);
+    }
+
+    sem_post(&game_sync->master_to_view);
+    sem_post(&game_sync->view_to_master);
+
+    if (sem_destroy(&game_sync->master_to_view) == -1) {
+        perror("sem_destroy master_to_view");
+    }
+    if (sem_destroy(&game_sync->view_to_master) == -1) {
+        perror("sem_destroy view_to_master");
+    }
+    if (sem_destroy(&game_sync->master_mutex) == -1) {
+        perror("sem_destroy master_mutex");
+    }
+    if (sem_destroy(&game_sync->state_mutex) == -1) {
+        perror("sem_destroy state_mutex");
+    }
+    if (sem_destroy(&game_sync->reader_count_mutex) == -1) {
+        perror("sem_destroy reader_count_mutex");
+    }
+    for (int i = 0; i < MAX_PLAYERS; i++) {
+        if (sem_destroy(&game_sync->player_mutex[i]) == -1) {
+            perror("sem_destroy player_mutex");
+        }
+    }
+
+    sync_sems_destroyed = 1;
+}
+
 void cleanup() {
+    destroy_sync_sems();
+
     if (state_mgr != NULL) {
         shm_manager_destroy(state_mgr);
         state_mgr = NULL;
@@ -71,7 +116,6 @@ void place_players() {
 }
 
 bool is_valid_move_locked(int player_id, direction_t direction) {
-   
     int x = game_state->players[player_id].x;
     int y = game_state->players[player_id].y;
     int new_x = x, new_y = y;
@@ -100,7 +144,6 @@ bool is_valid_move_locked(int player_id, direction_t direction) {
 }
 
 void apply_move_locked(int player_id, direction_t direction) {
-    
     int x = game_state->players[player_id].x;
     int y = game_state->players[player_id].y;
     int new_x = x, new_y = y;
@@ -125,7 +168,6 @@ void apply_move_locked(int player_id, direction_t direction) {
 }
 
 bool any_player_has_valid_move_locked() {
-
     for (unsigned int i = 0; i < game_state->player_count; i++) {
         if (game_state->players[i].blocked) continue;
         for (int d = 0; d < 8; d++) {
@@ -170,7 +212,7 @@ int main(int argc, char *argv[]) {
                 if (player_count < MAX_PLAYERS) {
                     player_paths[player_count++] = optarg;
                 } else {
-                    fprintf(stderr, "MÃ¡ximo de jugadores alcanzado (%d)\n", MAX_PLAYERS);
+                    fprintf(stderr, "Máximo de jugadores alcanzado (%d)\n", MAX_PLAYERS);
                 }
                 break;
             default:
@@ -187,7 +229,6 @@ int main(int argc, char *argv[]) {
         exit(EXIT_FAILURE);
     }
 
-
     size_t state_size = sizeof(game_state_t) + (size_t)width * height * sizeof(int);
     state_mgr = shm_manager_create(SHM_GAME_STATE, state_size, 0666, 0, 0);
     if (!state_mgr) {
@@ -203,7 +244,6 @@ int main(int argc, char *argv[]) {
         exit(EXIT_FAILURE);
     }
     game_sync = (game_sync_t *)shm_manager_data(sync_mgr);
-
 
     game_state->width = width;
     game_state->height = height;
@@ -222,7 +262,6 @@ int main(int argc, char *argv[]) {
     initialize_board(seed);
     place_players();
 
-   
     if (sem_init(&game_sync->master_to_view, 1, 0) == -1) { perror("sem_init master_to_view"); cleanup(); exit(EXIT_FAILURE); }
     if (sem_init(&game_sync->view_to_master, 1, 0) == -1) { perror("sem_init view_to_master"); cleanup(); exit(EXIT_FAILURE); }
     if (sem_init(&game_sync->master_mutex, 1, 1) == -1) { perror("sem_init master_mutex"); cleanup(); exit(EXIT_FAILURE); }
@@ -233,7 +272,7 @@ int main(int argc, char *argv[]) {
         if (sem_init(&game_sync->player_mutex[i], 1, 0) == -1) { perror("sem_init player_mutex"); cleanup(); exit(EXIT_FAILURE); }
     }
 
-   
+    
     pid_t view_pid = -1;
     if (view_path != NULL) {
         view_pid = fork();
@@ -249,7 +288,6 @@ int main(int argc, char *argv[]) {
     }
 
     if (view_path != NULL) {
-       
         sem_post(&game_sync->master_to_view);
         sem_wait(&game_sync->view_to_master);
     }
@@ -259,13 +297,13 @@ int main(int argc, char *argv[]) {
         if (pipe(player_pipes[i]) == -1) { perror("pipe"); cleanup(); exit(EXIT_FAILURE); }
     }
 
-  
+   
     int max_fd = -1;
     for (int i = 0; i < player_count; i++) {
         pid_t pid = fork();
         if (pid == -1) { perror("fork"); cleanup(); exit(EXIT_FAILURE); }
         else if (pid == 0) {
-           
+          
             close(player_pipes[i][PIPE_READ]);
             dup2(player_pipes[i][PIPE_WRITE], STDOUT_FILENO);
             close(player_pipes[i][PIPE_WRITE]);
@@ -287,11 +325,11 @@ int main(int argc, char *argv[]) {
 
     gettimeofday(&last_valid_move_time, NULL);
 
+    
     for (int i = 0; i < player_count; i++) {
         if (!game_state->players[i].blocked) sem_post(&game_sync->player_mutex[i]);
     }
 
-    
     while (!game_state->game_over) {
         fd_set rfds;
         FD_ZERO(&rfds);
@@ -324,7 +362,6 @@ int main(int argc, char *argv[]) {
                 unsigned char move;
                 ssize_t bytes_read = read(player_pipes[i][PIPE_READ], &move, 1);
                 if (bytes_read == 0) {
-                    
                     if (sem_wait(&game_sync->master_mutex) == -1) {
                         perror("sem_wait master_mutex");
                         break;
@@ -335,13 +372,11 @@ int main(int argc, char *argv[]) {
                         break;
                     }
                     game_state->players[i].blocked = true;
-                    
                     close(player_pipes[i][PIPE_READ]);
                     player_pipes[i][PIPE_READ] = -1;
                     sem_post(&game_sync->state_mutex);
                     sem_post(&game_sync->master_mutex);
                 } else if (bytes_read == 1) {
-                    
                     if (sem_wait(&game_sync->master_mutex) == -1) {
                         perror("sem_wait master_mutex");
                         break;
@@ -361,7 +396,6 @@ int main(int argc, char *argv[]) {
                         game_state->players[i].invalid_moves++;
                     }
 
-                    
                     sem_post(&game_sync->state_mutex);
                     sem_post(&game_sync->master_mutex);
 
@@ -370,10 +404,10 @@ int main(int argc, char *argv[]) {
                         sem_wait(&game_sync->view_to_master);
                     }
 
-                   
+                    
                     sem_post(&game_sync->player_mutex[i]);
 
-                   
+                    
                     struct timespec ts = {0, delay_ms * 1000000};
                     nanosleep(&ts, NULL);
                 }
@@ -430,11 +464,13 @@ int main(int argc, char *argv[]) {
         }
     }
 
+   
     if (view_path != NULL) {
         sem_post(&game_sync->master_to_view);
         sem_wait(&game_sync->view_to_master);
     }
 
+   
     if (sem_wait(&game_sync->master_mutex) == -1) {
         perror("sem_wait master_mutex (final)");
     } else {
@@ -462,6 +498,8 @@ int main(int argc, char *argv[]) {
     }
 
     if (view_path != NULL) waitpid(view_pid, NULL, 0);
+
+    destroy_sync_sems();
 
     int winner = -1;
     unsigned int max_score = 0;
