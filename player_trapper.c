@@ -1,10 +1,3 @@
-/* player_trapper_rw.c
- *
- * Trapper-style player adapted to use the same connection / RW reader protocol
- * as the previous working player. Logic (simulations, heuristics, Voronoi)
- * preserved almost verbatim. Sends one raw unsigned char (0..7) to stdout.
- */
-
 #include "common.h"
 #include "shm_manager.h"
 #include <stdlib.h>
@@ -21,9 +14,8 @@
 
 #define MAX_PLAYERS_PROBE 128
 
-/* ===== helper: reader-entry / exit helpers (writer-preference) ===== */
+
 static inline void reader_enter(game_sync_t *sync) {
-    /* follow the same pattern as the other player */
     sem_wait(&sync->master_mutex);
     sem_post(&sync->master_mutex);
 
@@ -39,7 +31,6 @@ static inline void reader_exit(game_sync_t *sync) {
     sem_post(&sync->reader_count_mutex);
 }
 
-/* find_my_index now uses reader lock when reading the players[] table */
 static int find_my_index(game_state_t *gs, game_sync_t *sync) {
     pid_t me = getpid();
     int idx = -1;
@@ -55,7 +46,6 @@ static int find_my_index(game_state_t *gs, game_sync_t *sync) {
     return idx;
 }
 
-/* helper: translate direction d into target coords (tx,ty) */
 static inline void target_from_dir(int gx, int gy, int d, int *tx, int *ty) {
     int nx = gx, ny = gy;
     switch (d) {
@@ -163,7 +153,6 @@ static int sim_pick_policy_move(int *board, int width, int height, sim_player_t 
         return -1;
     }
 
-    /* exploratory random choice with some probability */
     if ((rand() & 0xFF) < 30) {
         return valid_dirs[rand() % valid_count];
     }
@@ -196,7 +185,6 @@ static int sim_pick_policy_move(int *board, int width, int height, sim_player_t 
     return best_dirs[rand() % best_count];
 }
 
-/* Voronoi with external buffers to avoid malloc */
 static void compute_voronoi_potential_buf(int *board, int width, int height, sim_player_t *players, int player_count, unsigned int *vor_out, int *dist, int *owner, int *qx, int *qy, int *qo) {
     int n = width * height;
     for (int i = 0; i < n; i++) {
@@ -303,10 +291,7 @@ int main(int argc, char *argv[]) {
     }
     int width = atoi(argv[1]);
     int height = atoi(argv[2]);
-    size_t state_size = sizeof(game_state_t) + (size_t)width * height * sizeof(int);
 
-    /* --- Open the shared memory exactly the same way as the other player:
-       pass 0 size to map the existing segment (we only read). */
     shm_manager_t *state_mgr = shm_manager_open(SHM_GAME_STATE, 0, 0);
     if (!state_mgr) {
         perror("shm_manager_open state");
@@ -364,7 +349,7 @@ int main(int argc, char *argv[]) {
     sim_player_t *players_snapshot = malloc(sizeof(sim_player_t) * game_state->player_count);
     sim_player_t *players_sim = malloc(sizeof(sim_player_t) * game_state->player_count);
     unsigned int *vor_tmp = malloc(sizeof(unsigned int) * game_state->player_count);
-    /* Voronoi buffers allocated once */
+    
     int *dist = malloc(sizeof(int) * cells);
     int *owner = malloc(sizeof(int) * cells);
     int *qx = malloc(sizeof(int) * cells);
@@ -376,7 +361,7 @@ int main(int argc, char *argv[]) {
     }
 
     while (1) {
-        /* wait for master to allow this player (same as before) */
+        
         if (sem_wait(&game_sync->player_mutex[my_index]) == -1) {
             if (errno == EINTR) {
                 continue;
@@ -392,7 +377,6 @@ int main(int argc, char *argv[]) {
             break;
         }
 
-        /* ===== Reader entry: snapshot the board and players while holding reader lock ===== */
         reader_enter(game_sync);
         if (game_state->game_over) {
             reader_exit(game_sync);
@@ -409,7 +393,6 @@ int main(int argc, char *argv[]) {
         copy_players_sim(players_snapshot, game_state->players, gplayer_count);
         reader_exit(game_sync);
 
-        /* compute local valid moves and heuristics exactly as before */
         int valid_dirs[8];
         int valid_count = 0;
         int immediate_vals[8];
@@ -428,11 +411,9 @@ int main(int argc, char *argv[]) {
             valid_count++;
         }
         if (valid_count == 0) {
-            /* no valid moves: skip (master will mark blocked eventually) */
             continue;
         }
 
-        /* Opening-phase cheap evaluator: avoid sims if board mostly free */
         int free_cells = 0;
         for (int i = 0; i < cells; i++) {
             if (board_snapshot[i] > 0) {
@@ -441,7 +422,7 @@ int main(int argc, char *argv[]) {
         }
         int opening_threshold = (int)(cells * 0.55);
         if (free_cells >= opening_threshold) {
-            /* cheap pick */
+        
             double bestv = -DBL_MAX;
             int bests[8];
             int bc = 0;
@@ -472,7 +453,6 @@ int main(int argc, char *argv[]) {
             }
             int pick = bests[rand() % bc];
 
-            /* Re-check under exclusive state_mutex before sending (to ensure position not changed) */
             if (sem_wait(&game_sync->state_mutex) == -1) {
                 if (errno == EINTR) {
                     sem_post(&game_sync->player_mutex[my_index]);
@@ -500,7 +480,6 @@ int main(int argc, char *argv[]) {
             continue;
         }
 
-        /* Candidate pruning and sims (identical to your original) */
         int K = 3;
         if (valid_count < K) {
             K = valid_count;
@@ -586,7 +565,6 @@ int main(int argc, char *argv[]) {
 
         unsigned char move = (unsigned char)pick;
 
-        /* Re-check under exclusive state_mutex and send one raw byte if still valid */
         if (sem_wait(&game_sync->state_mutex) == -1) {
             if (errno == EINTR) {
                 sem_post(&game_sync->player_mutex[my_index]);

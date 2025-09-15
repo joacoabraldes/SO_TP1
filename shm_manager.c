@@ -1,6 +1,4 @@
-/* shm_manager.c — patched to allow read-only fallback for data-only SHM */
 #include "shm_manager.h"
-
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <fcntl.h>
@@ -9,16 +7,16 @@
 #include <string.h>
 #include <errno.h>
 #include <stdio.h>
-#include <semaphore.h> /* for sem_t */
+#include <semaphore.h> 
 
 struct shm_manager {
-    char *name;        /* malloc'd copy of name */
-    void *map;         /* pointer returned by mmap (base) */
-    size_t map_size;   /* total mapping size (data + maybe sem) */
-    size_t data_size;  /* requested usable data size */
-    int fd;            /* fd used (closed after mmap but kept; -1 if closed) */
-    int has_front_sem; /* boolean */
-    int read_only;     /* boolean: mapping opened read-only (fallback) */
+    char *name;        
+    void *map;         
+    size_t map_size;   
+    size_t data_size;  
+    int fd;            
+    int has_front_sem; 
+    int read_only;     
 };
 
 shm_manager_t *shm_manager_create(const char *name, size_t data_size, mode_t mode,
@@ -82,12 +80,6 @@ shm_manager_t *shm_manager_create(const char *name, size_t data_size, mode_t mod
     return r;
 }
 
-/*
-  shm_manager_open: attempt O_RDWR first. If that fails with EACCES
-  and with_front_sem==0 (data-only), try O_RDONLY and map read-only.
-  If with_front_sem==1 we do not fallback to read-only because
-  semaphore operations require writable mapping.
-*/
 shm_manager_t *shm_manager_open(const char *name, size_t data_size, int with_front_sem)
 {
     if (!name) {
@@ -99,8 +91,6 @@ shm_manager_t *shm_manager_open(const char *name, size_t data_size, int with_fro
     int read_only = 0;
 
     if (fd == -1) {
-        /* If caller doesn't require a front semaphore and permission denied,
-           try read-only fallback. */
         if (errno == EACCES && !with_front_sem) {
             fd = shm_open(name, O_RDONLY, 0);
             if (fd != -1) read_only = 1;
@@ -108,14 +98,12 @@ shm_manager_t *shm_manager_open(const char *name, size_t data_size, int with_fro
     }
 
     if (fd == -1) {
-        /* leave errno set by shm_open; caller can perror/strerror it */
         return NULL;
     }
 
     size_t map_size;
 
     if (data_size == 0) {
-        /* auto-detect existing shm size */
         struct stat st;
         if (fstat(fd, &st) == -1) {
             int saved = errno;
@@ -130,14 +118,12 @@ shm_manager_t *shm_manager_open(const char *name, size_t data_size, int with_fro
         }
         map_size = (size_t)st.st_size;
 
-        /* If the caller expects a front semaphore ensure size is sensible */
         if (with_front_sem && map_size < sizeof(sem_t)) {
             close(fd);
             errno = EINVAL;
             return NULL;
         }
     } else {
-        /* explicit requested data size */
         map_size = data_size + (with_front_sem ? sizeof(sem_t) : 0);
     }
 
@@ -163,7 +149,6 @@ shm_manager_t *shm_manager_open(const char *name, size_t data_size, int with_fro
     r->name = strdup(name);
     r->map = map;
     r->map_size = map_size;
-    /* record data_size: if caller passed 0, infer data_size as mapped minus front sem */
     if (data_size == 0) {
         r->data_size = map_size - (with_front_sem ? sizeof(sem_t) : 0);
     } else {

@@ -33,7 +33,6 @@ int main(int argc, char *argv[]) {
 
     size_t state_size = sizeof(game_state_t) + width * height * sizeof(int);
 
-    // Open existing shared regions (master already created them)
     shm_manager_t *state_mgr = shm_manager_open(SHM_GAME_STATE, state_size, 0);
     if (!state_mgr) { perror("shm_manager_open state"); exit(EXIT_FAILURE); }
     game_state_t *game_state = (game_state_t *)shm_manager_data(state_mgr);
@@ -57,7 +56,6 @@ int main(int argc, char *argv[]) {
 
         printf("\033[2J\033[H");
 
-        // top border
         printf("╔");
         for (int c = 0; c < width; c++) for (int k = 0; k < CELL_W; k++) printf("═");
         printf("╗\n");
@@ -79,12 +77,10 @@ int main(int argc, char *argv[]) {
             printf("║\n");
         }
 
-        // bottom border
         printf("╚");
         for (int c = 0; c < width; c++) for (int k = 0; k < CELL_W; k++) printf("═");
         printf("╝\n");
 
-        // sorted scoreboard
         unsigned int pc = game_state->player_count;
         int *order = malloc(pc * sizeof(int));
         if (!order) order = NULL;
@@ -112,7 +108,6 @@ int main(int argc, char *argv[]) {
         if (game_state->game_over) break;
     }
 
-    // cleanup: close the mapped regions (do NOT unlink)
     shm_manager_close(state_mgr);
     shm_manager_close(sync_mgr);
 
